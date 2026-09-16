@@ -26,6 +26,7 @@ $WazuhLog = Join-Path $BaseDir "chrome_history.log"
 
 $CollectorLog = Join-Path $BaseDir "collector.log"
 
+$SQLite = Join-Path $BaseDir "sqlite3.exe"
 
 # ------------------------------------------------------------
 # Create directory
@@ -96,7 +97,7 @@ $TempDb = Join-Path `
 # SQLite availability
 # ------------------------------------------------------------
 
-$SqliteExe = "C:\Users\Nauman Ahmad\AppData\Local\Microsoft\WinGet\Links\sqlite3.exe"
+$SqliteExe = "$SQLite"
 
 if (-not (Test-Path $SqliteExe)) {
 
