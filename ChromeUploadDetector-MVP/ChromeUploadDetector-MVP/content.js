@@ -1,14 +1,24 @@
 (() => {
   const seen = new WeakSet();
 
-  function send(payload) {
-    try {
-      chrome.runtime.sendMessage({
-        source: "CHROME_UPLOAD_DETECTOR",
-        payload
-      });
-    } catch {}
+function send(payload) {
+  try {
+    if (!chrome?.runtime?.id) {
+      return;
+    }
+
+    chrome.runtime.sendMessage({
+      source: "CHROME_UPLOAD_DETECTOR",
+      payload
+    }).catch(() => {
+      // Extension context may have been invalidated
+      // after the extension was reloaded.
+    });
+
+  } catch {
+    // Ignore invalidated extension contexts.
   }
+}
 
   function emit(type, file, input = null, extra = {}) {
     if (!file) return;
