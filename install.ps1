@@ -19,6 +19,7 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ServiceExe       = Join-Path $ScriptRoot "ChromeUploadDetectorService.exe"
 $Receiver         = Join-Path $ScriptRoot "receiver.ps1"
 $CollectorSource  = Join-Path $ScriptRoot "collector.ps1"
+$MvpSource        = Join-Path $ScriptRoot "ChromeUploadDetector-MVP"
 
 # Try the normal tools location first
 $SqliteSource = Join-Path $ScriptRoot "tools\sqlite3.exe"
@@ -32,6 +33,7 @@ $InstalledExe       = Join-Path $BaseDir "ChromeUploadDetectorService.exe"
 $InstalledReceiver  = Join-Path $BaseDir "receiver.ps1"
 $InstalledCollector = Join-Path $BaseDir "collector.ps1"
 $InstalledSqlite    = Join-Path $BaseDir "sqlite3.exe"
+$InstalledMvp        = Join-Path $BaseDir "ChromeUploadDetector-MVP"
 
 $ArchiveDb = Join-Path $BaseDir "chrome_history_archive.db"
 
@@ -62,6 +64,10 @@ if (-not (Test-Path $Receiver)) {
 
 if (-not (Test-Path $CollectorSource)) {
     throw "Missing: $CollectorSource"
+}
+
+if (-not (Test-Path $MvpSource -PathType Container)) {
+    throw "Missing ChromeUploadDetector-MVP folder: $MvpSource"
 }
 
 if (-not (Test-Path $SqliteSource)) {
@@ -194,6 +200,18 @@ Copy-Item `
 Copy-Item `
     $SqliteSource `
     $InstalledSqlite `
+    -Force
+
+# Copy the manual Chrome extension/configuration package so all
+# deployment components remain under the same ProgramData folder.
+if (Test-Path $InstalledMvp) {
+    Remove-Item $InstalledMvp -Recurse -Force
+}
+
+Copy-Item `
+    $MvpSource `
+    $InstalledMvp `
+    -Recurse `
     -Force
 
 Write-Host "      Collector installed."
@@ -362,7 +380,7 @@ $Action = New-ScheduledTaskAction `
 # ---------------------------------------------------------
 # Trigger
 #
-# Start at system startup and repeat every 1 minute.
+# Start at system startup and repeat every 10 seconds.
 # SYSTEM can access all normal user profile directories.
 # ---------------------------------------------------------
 
@@ -371,7 +389,7 @@ $StartTime = (Get-Date).AddMinutes(1)
 $Trigger = New-ScheduledTaskTrigger `
     -Once `
     -At $StartTime `
-    -RepetitionInterval (New-TimeSpan -Minutes 1) `
+    -RepetitionInterval (New-TimeSpan -Seconds 10) `
     -RepetitionDuration (New-TimeSpan -Days 3650)
 
 # ---------------------------------------------------------
@@ -409,7 +427,7 @@ Register-ScheduledTask `
 
 Write-Host "      History task created."
 Write-Host "      Account: SYSTEM"
-Write-Host "      Interval: 1 minute"
+Write-Host "      Interval: 10 seconds"
 Write-Host "      Mode: Hidden"
 
 # =========================================================
@@ -531,6 +549,13 @@ if (Test-Path $InstalledCollector) {
 }
 else {
     Write-Warning "Collector is missing."
+}
+
+if (Test-Path $InstalledMvp -PathType Container) {
+    Write-Host "  [OK] ChromeUploadDetector-MVP : Installed"
+}
+else {
+    Write-Warning "ChromeUploadDetector-MVP folder is missing."
 }
 
 Write-Host ""
