@@ -100,53 +100,45 @@ Write-Host "      $BaseDir"
 
 Write-Host "[3/9] Stopping previous components..."
 
-# ---------------------------------------------------------
-# Stop upload service
-# ---------------------------------------------------------
-
-$existingService = Get-Service `
-    -Name $ServiceName `
-    -ErrorAction SilentlyContinue
-
-if ($existingService) {
-
-    if ($existingService.Status -ne "Stopped") {
-
-        Write-Host "      Stopping upload detector service..."
-
-        Stop-Service `
-            -Name $ServiceName `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-        Start-Sleep -Seconds 2
-    }
-}
-
-# ---------------------------------------------------------
-# Stop/remove history task
-# ---------------------------------------------------------
-
-$existingTask = Get-ScheduledTask `
-    -TaskName $HistoryTaskName `
-    -ErrorAction SilentlyContinue
+$existingTask = Get-ScheduledTask -TaskName $HistoryTaskName -ErrorAction SilentlyContinue
 
 if ($existingTask) {
 
-    Write-Host "      Stopping history monitor task..."
+    Write-Host "      Stopping previous history task..."
 
-    Stop-ScheduledTask `
-        -TaskName $HistoryTaskName `
-        -ErrorAction SilentlyContinue
+    Stop-ScheduledTask -TaskName $HistoryTaskName -ErrorAction SilentlyContinue
 
-    Start-Sleep -Seconds 1
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Seconds 1
 
-    Write-Host "      Removing previous history task..."
+        $taskCheck = Get-ScheduledTask -TaskName $HistoryTaskName -ErrorAction SilentlyContinue
+
+        if (-not $taskCheck -or $taskCheck.State -ne "Running") {
+            break
+        }
+    }
 
     Unregister-ScheduledTask `
         -TaskName $HistoryTaskName `
         -Confirm:$false `
         -ErrorAction SilentlyContinue
+
+    Write-Host "      Previous history task removed."
+}
+
+$existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+
+if ($existingService) {
+
+    if ($existingService.Status -ne "Stopped") {
+
+        Write-Host "      Stopping previous upload detector service..."
+
+        Stop-Service `
+            -Name $ServiceName `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
 
     Start-Sleep -Seconds 2
 }
@@ -159,13 +151,25 @@ Write-Host "      Previous components stopped."
 
 Write-Host "[4/9] Removing previous upload service..."
 
-$existingService = Get-Service `
-    -Name $ServiceName `
-    -ErrorAction SilentlyContinue
+$existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
 if ($existingService) {
 
     & sc.exe delete $ServiceName | Out-Null
+
+    for ($i = 0; $i -lt 20; $i++) {
+
+        Start-Sleep -Milliseconds 500
+
+        $serviceCheck = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+
+        if (-not $serviceCheck) {
+            break
+        }
+    }
+
+    Get-Process -Name "ChromeUploadDetectorService" -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
 
     Start-Sleep -Seconds 2
 
@@ -176,11 +180,42 @@ else {
     Write-Host "      No previous service found."
 }
 
+# Final executable lock check before Copy-Item.
+if (Test-Path $InstalledExe) {
+
+    $lockReleased = $false
+
+    for ($i = 0; $i -lt 10; $i++) {
+
+        try {
+            $stream = [System.IO.File]::Open(
+                $InstalledExe,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+
+            $stream.Close()
+            $stream.Dispose()
+
+            $lockReleased = $true
+            break
+        }
+        catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    if (-not $lockReleased) {
+        throw "ChromeUploadDetectorService.exe is still in use. Installation cannot safely replace it."
+    }
+}
+
 # =========================================================
 # [5] INSTALL RUNTIME FILES
 # =========================================================
 
-Write-Host "[5/9] Installing runtime files..."
+
 
 Copy-Item `
     $Receiver `
@@ -368,66 +403,57 @@ Write-Host "      Account: LocalSystem"
 
 Write-Host "      Creating multi-user Chrome history task..."
 
-# ---------------------------------------------------------
-# Action
-# ---------------------------------------------------------
+# Task Scheduler does not accept a 10-second repetition interval through
+# New-ScheduledTaskTrigger. The task therefore starts once at Windows
+# startup, while collector.ps1 remains running and polls every 10 seconds.
 
 $Action = New-ScheduledTaskAction `
-    -Execute "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+    -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstalledCollector`"" `
     -WorkingDirectory $BaseDir
 
-# ---------------------------------------------------------
-# Trigger
-#
-# Start at system startup and repeat every 10 seconds.
-# SYSTEM can access all normal user profile directories.
-# ---------------------------------------------------------
-
-$StartTime = (Get-Date).AddMinutes(1)
-
-$Trigger = New-ScheduledTaskTrigger `
-    -Once `
-    -At $StartTime `
-    -RepetitionInterval (New-TimeSpan -Seconds 10) `
-    -RepetitionDuration (New-TimeSpan -Days 3650)
-
-# ---------------------------------------------------------
-# SYSTEM principal
-# ---------------------------------------------------------
+$Trigger = New-ScheduledTaskTrigger -AtStartup
 
 $Principal = New-ScheduledTaskPrincipal `
     -UserId "SYSTEM" `
     -LogonType ServiceAccount `
     -RunLevel Highest
 
-# ---------------------------------------------------------
-# Settings
-# ---------------------------------------------------------
-
 $Settings = New-ScheduledTaskSettingsSet `
     -Hidden `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
     -MultipleInstances IgnoreNew
 
-# ---------------------------------------------------------
-# Register
-# ---------------------------------------------------------
+try {
 
-Register-ScheduledTask `
+    Register-ScheduledTask `
+        -TaskName $HistoryTaskName `
+        -Action $Action `
+        -Trigger $Trigger `
+        -Principal $Principal `
+        -Settings $Settings `
+        -Description "Multi-user Chrome History Monitor - 10 second polling" `
+        -Force `
+        -ErrorAction Stop | Out-Null
+
+}
+catch {
+    throw "Failed to create Chrome History Monitor task: $($_.Exception.Message)"
+}
+
+$CreatedTask = Get-ScheduledTask `
     -TaskName $HistoryTaskName `
-    -Action $Action `
-    -Trigger $Trigger `
-    -Principal $Principal `
-    -Settings $Settings `
-    -Description "Multi-user Chrome History Monitor" `
-    -Force
+    -ErrorAction Stop
 
 Write-Host "      History task created."
-Write-Host "      Account: SYSTEM"
-Write-Host "      Interval: 10 seconds"
+Write-Host "      Account: $($CreatedTask.Principal.UserId)"
+Write-Host "      Startup: Windows startup"
+Write-Host "      Polling: 10 seconds"
 Write-Host "      Mode: Hidden"
 
 # =========================================================
@@ -470,22 +496,31 @@ Write-Host "      Upload detector: Running"
 try {
 
     Start-ScheduledTask `
-        -TaskName $HistoryTaskName
+        -TaskName $HistoryTaskName `
+        -ErrorAction Stop
 
     Start-Sleep -Seconds 5
 
     $TaskInfo = Get-ScheduledTaskInfo `
-        -TaskName $HistoryTaskName
+        -TaskName $HistoryTaskName `
+        -ErrorAction Stop
+
+    $RunningTask = Get-ScheduledTask `
+        -TaskName $HistoryTaskName `
+        -ErrorAction Stop
 
     Write-Host "      History monitor started."
+    Write-Host "      State: $($RunningTask.State)"
     Write-Host "      Last run: $($TaskInfo.LastRunTime)"
     Write-Host "      Result: $($TaskInfo.LastTaskResult)"
 
+    if ($RunningTask.State -ne "Running") {
+        throw "History task was created but is not running."
+    }
+
 }
 catch {
-
-    Write-Warning "History task could not be started immediately."
-    Write-Warning "It will start automatically from its trigger."
+    throw "History monitor could not be started: $($_.Exception.Message)"
 }
 
 # =========================================================
@@ -525,9 +560,11 @@ if ($task) {
 
     Write-Host "  [OK] Chrome history task     : Installed"
     Write-Host "  [OK] History task account    : $($PrincipalInfo.UserId)"
+    Write-Host "  [OK] History polling         : 10 seconds"
+
 }
 else {
-    Write-Warning "Chrome history task was not installed."
+    throw "Chrome history task verification failed. The task does not exist."
 }
 
 if ($listener) {
@@ -551,11 +588,13 @@ else {
     Write-Warning "Collector is missing."
 }
 
-if (Test-Path $InstalledMvp -PathType Container) {
+if ((Test-Path $InstalledMvp -PathType Container) -and
+    (Get-ChildItem $InstalledMvp -Force -ErrorAction SilentlyContinue)) {
+
     Write-Host "  [OK] ChromeUploadDetector-MVP : Installed"
 }
 else {
-    Write-Warning "ChromeUploadDetector-MVP folder is missing."
+    throw "ChromeUploadDetector-MVP folder verification failed."
 }
 
 Write-Host ""

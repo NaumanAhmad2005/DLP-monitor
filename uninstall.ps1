@@ -13,19 +13,75 @@ Write-Host " Uninstallation"
 Write-Host "========================================="
 Write-Host ""
 
-$Service = Get-Service $ServiceName
-if ($Service) {
-    Write-Host "Stopping upload service..."
-    Stop-Service $ServiceName -Force
+# =========================================================
+# Stop/remove history monitor task
+# =========================================================
+
+$Task = Get-ScheduledTask `
+    -TaskName $HistoryTaskName `
+    -ErrorAction SilentlyContinue
+
+if ($Task) {
+
+    Write-Host "Stopping history monitor..."
+
+    Stop-ScheduledTask `
+        -TaskName $HistoryTaskName `
+        -ErrorAction SilentlyContinue
+
     Start-Sleep -Seconds 2
-    & sc.exe delete $ServiceName | Out-Null
+
+    Write-Host "Removing history monitor task..."
+
+    Unregister-ScheduledTask `
+        -TaskName $HistoryTaskName `
+        -Confirm:$false `
+        -ErrorAction SilentlyContinue
+
+    Write-Host "History monitor task removed."
+
+}
+else {
+
+    Write-Host "History monitor task not found. Nothing to remove."
 }
 
-$Task = Get-ScheduledTask $HistoryTaskName
-if ($Task) {
-    Write-Host "Removing history task..."
-    Stop-ScheduledTask $HistoryTaskName
-    Unregister-ScheduledTask $HistoryTaskName -Confirm:$false
+# =========================================================
+# Stop/remove upload detector service
+# =========================================================
+
+$Service = Get-Service `
+    -Name $ServiceName `
+    -ErrorAction SilentlyContinue
+
+if ($Service) {
+
+    Write-Host "Stopping upload service..."
+
+    Stop-Service `
+        -Name $ServiceName `
+        -Force `
+        -ErrorAction SilentlyContinue
+
+    Start-Sleep -Seconds 2
+
+    Write-Host "Removing upload service..."
+
+    & sc.exe delete $ServiceName | Out-Null
+
+    Start-Sleep -Seconds 2
+
+    Get-Process `
+        -Name "ChromeUploadDetectorService" `
+        -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+
+    Write-Host "Upload service removed."
+
+}
+else {
+
+    Write-Host "Upload service not found. Nothing to remove."
 }
 
 Write-Host ""
