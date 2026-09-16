@@ -2,42 +2,37 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 
+$BaseDir = "C:\ProgramData\ChromeHistoryMonitor"
 $ServiceName = "Chrome Upload Detector"
+$HistoryTaskName = "Chrome History Monitor"
 
 Write-Host ""
 Write-Host "========================================="
-Write-Host " Chrome Upload Detector Uninstallation"
+Write-Host " Chrome History & Upload Monitor"
+Write-Host " Uninstallation"
 Write-Host "========================================="
 Write-Host ""
 
-Write-Host "Stopping service..."
-
-Stop-Service $ServiceName -Force
-
-Start-Sleep -Seconds 2
-
-Write-Host "Removing service..."
-
-& sc.exe delete $ServiceName
-
-Start-Sleep -Seconds 2
-
-Write-Host ""
-Write-Host "Service removed."
-Write-Host ""
-
-$remaining = Get-Service $ServiceName -ErrorAction SilentlyContinue
-
-if ($remaining) {
-    Write-Warning "Service still appears to exist. A reboot may be required."
-}
-else {
-    Write-Host "Chrome Upload Detector successfully uninstalled."
+$Service = Get-Service $ServiceName
+if ($Service) {
+    Write-Host "Stopping upload service..."
+    Stop-Service $ServiceName -Force
+    Start-Sleep -Seconds 2
+    & sc.exe delete $ServiceName | Out-Null
 }
 
+$Task = Get-ScheduledTask $HistoryTaskName
+if ($Task) {
+    Write-Host "Removing history task..."
+    Stop-ScheduledTask $HistoryTaskName
+    Unregister-ScheduledTask $HistoryTaskName -Confirm:$false
+}
+
+Write-Host ""
+Write-Host "Services and tasks removed."
 Write-Host ""
 Write-Host "The data directory was NOT deleted:"
-Write-Host "C:\ProgramData\ChromeHistoryMonitor"
+Write-Host $BaseDir
 Write-Host ""
-Write-Host "Logs and database have been preserved."
+Write-Host "Logs and databases have been preserved."
 Write-Host ""
