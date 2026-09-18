@@ -1,8 +1,8 @@
-# Chrome History & Upload Monitor for Wazuh
+# DLP Based Web Activity Monitor and Upload Detector 
 
 ## Overview
 
-Chrome History & Upload Monitor is a Windows-based DLP monitoring solution designed to monitor **multiple Windows users and Chrome profiles** on an endpoint. It collects Chrome browsing history and detects file upload activity through a Chrome Extension, processes the telemetry locally, and forwards structured events to **Wazuh** for centralized monitoring, custom rule-based detection, and security alerting through the Wazuh Dashboard.
+It is a Windows-based DLP monitoring solution designed to monitor **multiple Windows users and Chrome profiles** on an endpoint. It collects Chrome browsing history and detects file upload activity through a Chrome Extension, processes the telemetry locally, and forwards structured events to **Wazuh** for centralized monitoring, custom rule-based detection, and security alerting through the Wazuh Dashboard.
 
 The system maintains **separate state for each Windows user and Chrome profile**, allowing browsing activity from multiple users on the same Windows machine to be collected without mixing their records.
 
