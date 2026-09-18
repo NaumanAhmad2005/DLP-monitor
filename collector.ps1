@@ -323,7 +323,7 @@ function Invoke-ChromeHistoryCollection {
 # Continuous monitoring loop
 # ------------------------------------------------------------
 
-$CollectionIntervalSeconds = 10
+$CollectionIntervalSeconds = 5
 
 Write-CollectorLog "Chrome History Monitor started. Polling interval: $CollectionIntervalSeconds seconds."
 
