@@ -8,15 +8,22 @@ $ErrorActionPreference = "Stop"
 
 $BaseDir = "C:\ProgramData\ChromeHistoryMonitor"
 
-$ServiceName        = "Chrome Upload Detector"
-$ServiceDisplayName = "Chrome Upload Detector"
+# Chrome Upload Detector
+$UploadServiceName        = "Chrome Upload Detector"
+$UploadServiceDisplayName = "Chrome Upload Detector"
 
-$HistoryTaskName = "Chrome History Monitor"
+# Chrome History Monitor
+$HistoryServiceName        = "ChromeHistoryMonitor"
+$HistoryServiceDisplayName = "Chrome History Monitor"
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# ---------------------------------------------------------
 # Installer source files
-$ServiceExe       = Join-Path $ScriptRoot "ChromeUploadDetectorService.exe"
+# ---------------------------------------------------------
+
+$UploadServiceExe = Join-Path $ScriptRoot "ChromeUploadDetectorService.exe"
+$HistoryServiceExe = Join-Path $ScriptRoot "ChromeHistoryService.exe"
 $Receiver         = Join-Path $ScriptRoot "receiver.ps1"
 $CollectorSource  = Join-Path $ScriptRoot "collector.ps1"
 $MvpSource        = Join-Path $ScriptRoot "ChromeUploadDetector-MVP"
@@ -28,12 +35,16 @@ if (-not (Test-Path $SqliteSource)) {
     $SqliteSource = Join-Path $ScriptRoot "sqlite3.exe"
 }
 
+# ---------------------------------------------------------
 # Installed files
-$InstalledExe       = Join-Path $BaseDir "ChromeUploadDetectorService.exe"
-$InstalledReceiver  = Join-Path $BaseDir "receiver.ps1"
-$InstalledCollector = Join-Path $BaseDir "collector.ps1"
-$InstalledSqlite    = Join-Path $BaseDir "sqlite3.exe"
-$InstalledMvp        = Join-Path $BaseDir "ChromeUploadDetector-MVP"
+# ---------------------------------------------------------
+
+$InstalledUploadExe         = Join-Path $BaseDir "ChromeUploadDetectorService.exe"
+$InstalledHistoryServiceExe = Join-Path $BaseDir "ChromeHistoryService.exe"
+$InstalledReceiver          = Join-Path $BaseDir "receiver.ps1"
+$InstalledCollector         = Join-Path $BaseDir "collector.ps1"
+$InstalledSqlite            = Join-Path $BaseDir "sqlite3.exe"
+$InstalledMvp               = Join-Path $BaseDir "ChromeUploadDetector-MVP"
 
 $ArchiveDb = Join-Path $BaseDir "chrome_history_archive.db"
 
@@ -54,8 +65,12 @@ Write-Host ""
 
 Write-Host "[1/9] Checking installation files..."
 
-if (-not (Test-Path $ServiceExe)) {
-    throw "Missing: $ServiceExe"
+if (-not (Test-Path $UploadServiceExe)) {
+    throw "Missing: $UploadServiceExe"
+}
+
+if (-not (Test-Path $HistoryServiceExe)) {
+    throw "Missing: $HistoryServiceExe"
 }
 
 if (-not (Test-Path $Receiver)) {
@@ -71,14 +86,12 @@ if (-not (Test-Path $MvpSource -PathType Container)) {
 }
 
 if (-not (Test-Path $SqliteSource)) {
-    throw "Missing sqlite3.exe."
-    Write-Host "Expected:"
-    Write-Host "  $ScriptRoot\tools\sqlite3.exe"
-    Write-Host "or"
-    Write-Host "  $ScriptRoot\sqlite3.exe"
+    throw "Missing sqlite3.exe. Expected $ScriptRoot\tools\sqlite3.exe or $ScriptRoot\sqlite3.exe"
 }
 
 Write-Host "      Required files found."
+Write-Host "      History service: $HistoryServiceExe"
+Write-Host "      Upload service : $UploadServiceExe"
 
 # =========================================================
 # [2] CREATE PROGRAM DIRECTORY
@@ -100,131 +113,239 @@ Write-Host "      $BaseDir"
 
 Write-Host "[3/9] Stopping previous components..."
 
-$existingTask = Get-ScheduledTask -TaskName $HistoryTaskName -ErrorAction SilentlyContinue
+# ---------------------------------------------------------
+# Stop/remove old Scheduled Task if it exists
+# ---------------------------------------------------------
+
+$HistoryTaskName = "Chrome History Monitor"
+
+$existingTask = Get-ScheduledTask `
+    -TaskName $HistoryTaskName `
+    -ErrorAction SilentlyContinue
 
 if ($existingTask) {
 
-    Write-Host "      Stopping previous history task..."
+    Write-Host "      Found old history Scheduled Task."
 
-    Stop-ScheduledTask -TaskName $HistoryTaskName -ErrorAction SilentlyContinue
+    Stop-ScheduledTask `
+        -TaskName $HistoryTaskName `
+        -ErrorAction SilentlyContinue
 
-    for ($i = 0; $i -lt 15; $i++) {
-        Start-Sleep -Seconds 1
-
-        $taskCheck = Get-ScheduledTask -TaskName $HistoryTaskName -ErrorAction SilentlyContinue
-
-        if (-not $taskCheck -or $taskCheck.State -ne "Running") {
-            break
-        }
-    }
+    Start-Sleep -Seconds 2
 
     Unregister-ScheduledTask `
         -TaskName $HistoryTaskName `
         -Confirm:$false `
         -ErrorAction SilentlyContinue
 
-    Write-Host "      Previous history task removed."
+    Write-Host "      Old history Scheduled Task removed."
 }
 
-$existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+# ---------------------------------------------------------
+# Stop history Windows Service if it already exists
+# ---------------------------------------------------------
 
-if ($existingService) {
+$existingHistoryService = Get-Service `
+    -Name $HistoryServiceName `
+    -ErrorAction SilentlyContinue
 
-    if ($existingService.Status -ne "Stopped") {
+if ($existingHistoryService) {
 
-        Write-Host "      Stopping previous upload detector service..."
+    Write-Host "      Found existing history service."
+
+    if ($existingHistoryService.Status -ne "Stopped") {
+        Write-Host "      Stopping history service..."
 
         Stop-Service `
-            -Name $ServiceName `
+            -Name $HistoryServiceName `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+        Start-Sleep -Seconds 2
+    }
+}
+
+# ---------------------------------------------------------
+# Stop upload service if it already exists
+# ---------------------------------------------------------
+
+$existingUploadService = Get-Service `
+    -Name $UploadServiceName `
+    -ErrorAction SilentlyContinue
+
+if ($existingUploadService) {
+
+    Write-Host "      Found existing upload detector service."
+
+    if ($existingUploadService.Status -ne "Stopped") {
+        Write-Host "      Stopping upload detector service..."
+
+        Stop-Service `
+            -Name $UploadServiceName `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+        Start-Sleep -Seconds 2
+    }
+}
+
+# ---------------------------------------------------------
+# Stop any remaining collector processes
+# ---------------------------------------------------------
+
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.CommandLine -like "*collector.ps1*"
+    } |
+    ForEach-Object {
+
+        Write-Host "      Stopping collector PID $($_.ProcessId)..."
+
+        Stop-Process `
+            -Id $_.ProcessId `
             -Force `
             -ErrorAction SilentlyContinue
     }
 
-    Start-Sleep -Seconds 2
-}
+Start-Sleep -Seconds 2
+
+# ---------------------------------------------------------
+# Stop remaining service executable processes
+# ---------------------------------------------------------
+
+Get-Process -Name "ChromeHistoryService" -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+Get-Process -Name "ChromeUploadDetectorService" -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+Start-Sleep -Seconds 2
 
 Write-Host "      Previous components stopped."
 
 # =========================================================
-# [4] REMOVE OLD SERVICE
+# [4] REMOVE OLD SERVICE REGISTRATIONS
 # =========================================================
 
-Write-Host "[4/9] Removing previous upload service..."
+Write-Host "[4/9] Removing previous service registrations..."
 
-$existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+# ---------------------------------------------------------
+# Remove history service
+# ---------------------------------------------------------
 
-if ($existingService) {
+$existingHistoryService = Get-Service `
+    -Name $HistoryServiceName `
+    -ErrorAction SilentlyContinue
 
-    & sc.exe delete $ServiceName | Out-Null
+if ($existingHistoryService) {
+
+    & sc.exe delete $HistoryServiceName | Out-Null
 
     for ($i = 0; $i -lt 20; $i++) {
-
         Start-Sleep -Milliseconds 500
 
-        $serviceCheck = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        $serviceCheck = Get-Service `
+            -Name $HistoryServiceName `
+            -ErrorAction SilentlyContinue
 
         if (-not $serviceCheck) {
             break
         }
     }
 
-    Get-Process -Name "ChromeUploadDetectorService" -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
-
-    Start-Sleep -Seconds 2
-
-    Write-Host "      Previous service removed."
+    Write-Host "      Previous history service removed."
 }
 else {
-
-    Write-Host "      No previous service found."
+    Write-Host "      No previous history service found."
 }
 
-# Final executable lock check before Copy-Item.
-if (Test-Path $InstalledExe) {
+# ---------------------------------------------------------
+# Remove upload service
+# ---------------------------------------------------------
 
-    $lockReleased = $false
+$existingUploadService = Get-Service `
+    -Name $UploadServiceName `
+    -ErrorAction SilentlyContinue
 
-    for ($i = 0; $i -lt 10; $i++) {
+if ($existingUploadService) {
 
-        try {
-            $stream = [System.IO.File]::Open(
-                $InstalledExe,
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::ReadWrite,
-                [System.IO.FileShare]::None
-            )
+    & sc.exe delete $UploadServiceName | Out-Null
 
-            $stream.Close()
-            $stream.Dispose()
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 500
 
-            $lockReleased = $true
+        $serviceCheck = Get-Service `
+            -Name $UploadServiceName `
+            -ErrorAction SilentlyContinue
+
+        if (-not $serviceCheck) {
             break
         }
-        catch {
-            Start-Sleep -Milliseconds 500
-        }
     }
 
-    if (-not $lockReleased) {
-        throw "ChromeUploadDetectorService.exe is still in use. Installation cannot safely replace it."
+    Write-Host "      Previous upload service removed."
+}
+else {
+    Write-Host "      No previous upload service found."
+}
+
+# ---------------------------------------------------------
+# Verify service executables are no longer locked
+# ---------------------------------------------------------
+
+foreach ($Executable in @(
+    $InstalledHistoryServiceExe,
+    $InstalledUploadExe
+)) {
+
+    if (Test-Path $Executable) {
+
+        $lockReleased = $false
+
+        for ($i = 0; $i -lt 10; $i++) {
+
+            try {
+
+                $stream = [System.IO.File]::Open(
+                    $Executable,
+                    [System.IO.FileMode]::Open,
+                    [System.IO.FileAccess]::ReadWrite,
+                    [System.IO.FileShare]::None
+                )
+
+                $stream.Close()
+                $stream.Dispose()
+
+                $lockReleased = $true
+                break
+            }
+            catch {
+                Start-Sleep -Milliseconds 500
+            }
+        }
+
+        if (-not $lockReleased) {
+            throw "$Executable is still in use. Installation cannot safely replace it."
+        }
     }
 }
+
+Write-Host "      Service executable locks released."
 
 # =========================================================
 # [5] INSTALL RUNTIME FILES
 # =========================================================
 
-
+Write-Host "[5/9] Installing runtime files..."
 
 Copy-Item `
-    $Receiver `
-    $InstalledReceiver `
+    $HistoryServiceExe `
+    $InstalledHistoryServiceExe `
     -Force
 
 Copy-Item `
-    $ServiceExe `
-    $InstalledExe `
+    $UploadServiceExe `
+    $InstalledUploadExe `
     -Force
 
 Copy-Item `
@@ -233,14 +354,21 @@ Copy-Item `
     -Force
 
 Copy-Item `
+    $Receiver `
+    $InstalledReceiver `
+    -Force
+
+Copy-Item `
     $SqliteSource `
     $InstalledSqlite `
     -Force
 
-# Copy the manual Chrome extension/configuration package so all
-# deployment components remain under the same ProgramData folder.
+# Copy extension/configuration package
 if (Test-Path $InstalledMvp) {
-    Remove-Item $InstalledMvp -Recurse -Force
+    Remove-Item `
+        $InstalledMvp `
+        -Recurse `
+        -Force
 }
 
 Copy-Item `
@@ -249,10 +377,12 @@ Copy-Item `
     -Recurse `
     -Force
 
+Write-Host "      History service installed."
+Write-Host "      Upload service installed."
 Write-Host "      Collector installed."
 Write-Host "      Receiver installed."
-Write-Host "      Upload service installed."
 Write-Host "      SQLite installed."
+Write-Host "      ChromeUploadDetector-MVP installed."
 
 # =========================================================
 # VERIFY COLLECTOR SYNTAX BEFORE CONTINUING
@@ -294,15 +424,15 @@ if (Test-Path $ArchiveDb) {
 
     Write-Host "      Existing archive found."
 
-    # Make sure sqlite can be executed
     if (-not (Test-Path $InstalledSqlite)) {
         throw "Installed sqlite3.exe was not found."
     }
 
-    # Read the actual history-table column names.
-    # Checking exact column names avoids false schema failures.
     $ColumnNames = @(
-        & $InstalledSqlite $ArchiveDb "SELECT name FROM pragma_table_info('history');" 2>$null |
+        & $InstalledSqlite `
+            $ArchiveDb `
+            "SELECT name FROM pragma_table_info('history');" `
+            2>$null |
         ForEach-Object { $_.ToString().Trim() } |
         Where-Object { $_ }
     )
@@ -325,13 +455,11 @@ if (Test-Path $ArchiveDb) {
     if ($LooksOld) {
 
         $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-
         $BackupDb = "$ArchiveDb.old_$Stamp"
 
         Write-Host ""
-        Write-Host "      Old single-user archive detected."
+        Write-Host "      Old archive detected."
         Write-Host "      Backing it up before creating the new archive."
-        Write-Host ""
         Write-Host "      Backup: $BackupDb"
 
         Move-Item `
@@ -339,8 +467,6 @@ if (Test-Path $ArchiveDb) {
             $BackupDb `
             -Force
 
-        # Also remove possible WAL/SHM files associated with
-        # the old database.
         Remove-Item `
             "$ArchiveDb-wal" `
             -Force `
@@ -359,7 +485,6 @@ if (Test-Path $ArchiveDb) {
         Write-Host "      Existing archive appears compatible."
         Write-Host "      Existing history will be preserved."
     }
-
 }
 else {
 
@@ -368,93 +493,62 @@ else {
 }
 
 # =========================================================
-# [7] CREATE UPLOAD DETECTOR WINDOWS SERVICE
+# [7] CREATE WINDOWS SERVICES
 # =========================================================
 
-Write-Host "[7/9] Configuring upload detector service..."
+Write-Host "[7/9] Configuring Windows services..."
 
-& sc.exe create $ServiceName `
-    binPath= "`"$InstalledExe`"" `
+# ---------------------------------------------------------
+# Chrome History Monitor
+# ---------------------------------------------------------
+
+& sc.exe create $HistoryServiceName `
+    binPath= "`"$InstalledHistoryServiceExe`"" `
     start= auto `
-    DisplayName= "`"$ServiceDisplayName`"" `
+    DisplayName= "`"$HistoryServiceDisplayName`"" `
+    obj= LocalSystem
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create Chrome History Monitor service."
+}
+
+& sc.exe failure $HistoryServiceName `
+    reset= 86400 `
+    actions= restart/5000/restart/5000/restart/10000 |
+    Out-Null
+
+& sc.exe failureflag $HistoryServiceName 1 |
+    Out-Null
+
+Write-Host "      Chrome History service created."
+Write-Host "      Startup: Automatic"
+Write-Host "      Account: LocalSystem"
+
+# ---------------------------------------------------------
+# Chrome Upload Detector
+# ---------------------------------------------------------
+
+& sc.exe create $UploadServiceName `
+    binPath= "`"$InstalledUploadExe`"" `
+    start= auto `
+    DisplayName= "`"$UploadServiceDisplayName`"" `
     obj= LocalSystem
 
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to create Chrome Upload Detector service."
 }
 
-# Automatic service recovery
-
-& sc.exe failure $ServiceName `
+& sc.exe failure $UploadServiceName `
     reset= 86400 `
     actions= restart/5000/restart/5000/restart/10000 |
     Out-Null
 
-& sc.exe failureflag $ServiceName 1 |
+& sc.exe failureflag $UploadServiceName 1 |
     Out-Null
 
-Write-Host "      Upload service created."
+Write-Host "      Chrome Upload Detector service created."
 Write-Host "      Startup: Automatic"
 Write-Host "      Account: LocalSystem"
-
-# =========================================================
-# CREATE HISTORY MONITOR TASK
-# =========================================================
-
-Write-Host "      Creating multi-user Chrome history task..."
-
-# Task Scheduler does not accept a 10-second repetition interval through
-# New-ScheduledTaskTrigger. The task therefore starts once at Windows
-# startup, while collector.ps1 remains running and polls every 10 seconds.
-
-$Action = New-ScheduledTaskAction `
-    -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstalledCollector`"" `
-    -WorkingDirectory $BaseDir
-
-$Trigger = New-ScheduledTaskTrigger -AtStartup
-
-$Principal = New-ScheduledTaskPrincipal `
-    -UserId "SYSTEM" `
-    -LogonType ServiceAccount `
-    -RunLevel Highest
-
-$Settings = New-ScheduledTaskSettingsSet `
-    -Hidden `
-    -StartWhenAvailable `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1) `
-    -MultipleInstances IgnoreNew
-
-try {
-
-    Register-ScheduledTask `
-        -TaskName $HistoryTaskName `
-        -Action $Action `
-        -Trigger $Trigger `
-        -Principal $Principal `
-        -Settings $Settings `
-        -Description "Multi-user Chrome History Monitor - 10 second polling" `
-        -Force `
-        -ErrorAction Stop | Out-Null
-
-}
-catch {
-    throw "Failed to create Chrome History Monitor task: $($_.Exception.Message)"
-}
-
-$CreatedTask = Get-ScheduledTask `
-    -TaskName $HistoryTaskName `
-    -ErrorAction Stop
-
-Write-Host "      History task created."
-Write-Host "      Account: $($CreatedTask.Principal.UserId)"
-Write-Host "      Startup: Windows startup"
-Write-Host "      Polling: 10 seconds"
-Write-Host "      Mode: Hidden"
 
 # =========================================================
 # [8] START COMPONENTS
@@ -463,65 +557,58 @@ Write-Host "      Mode: Hidden"
 Write-Host "[8/9] Starting monitoring components..."
 
 # ---------------------------------------------------------
-# Start upload service
+# Start Chrome History Monitor
 # ---------------------------------------------------------
 
 Start-Service `
-    -Name $ServiceName
+    -Name $HistoryServiceName
 
 Start-Sleep -Seconds 3
 
-$service = Get-Service `
-    -Name $ServiceName
+$HistoryService = Get-Service `
+    -Name $HistoryServiceName `
+    -ErrorAction Stop
 
-if ($service.Status -ne "Running") {
+if ($HistoryService.Status -ne "Running") {
 
     Write-Host ""
-    Write-Host "ERROR: Upload detector service failed to start."
+    Write-Host "ERROR: Chrome History Monitor service failed to start."
     Write-Host ""
+    Write-Host "Check:"
+    Write-Host "  $BaseDir\service.log"
+    Write-Host "  $BaseDir\collector.log"
 
+    throw "Chrome History Monitor service is not running."
+}
+
+Write-Host "      Chrome History Monitor: Running"
+
+# ---------------------------------------------------------
+# Start Chrome Upload Detector
+# ---------------------------------------------------------
+
+Start-Service `
+    -Name $UploadServiceName
+
+Start-Sleep -Seconds 3
+
+$UploadService = Get-Service `
+    -Name $UploadServiceName `
+    -ErrorAction Stop
+
+if ($UploadService.Status -ne "Running") {
+
+    Write-Host ""
+    Write-Host "ERROR: Chrome Upload Detector service failed to start."
+    Write-Host ""
     Write-Host "Check:"
     Write-Host "  $BaseDir\service-host.log"
     Write-Host "  $BaseDir\receiver.log"
 
-    exit 1
+    throw "Chrome Upload Detector service is not running."
 }
 
-Write-Host "      Upload detector: Running"
-
-# ---------------------------------------------------------
-# Start history task immediately
-# ---------------------------------------------------------
-
-try {
-
-    Start-ScheduledTask `
-        -TaskName $HistoryTaskName `
-        -ErrorAction Stop
-
-    Start-Sleep -Seconds 5
-
-    $TaskInfo = Get-ScheduledTaskInfo `
-        -TaskName $HistoryTaskName `
-        -ErrorAction Stop
-
-    $RunningTask = Get-ScheduledTask `
-        -TaskName $HistoryTaskName `
-        -ErrorAction Stop
-
-    Write-Host "      History monitor started."
-    Write-Host "      State: $($RunningTask.State)"
-    Write-Host "      Last run: $($TaskInfo.LastRunTime)"
-    Write-Host "      Result: $($TaskInfo.LastTaskResult)"
-
-    if ($RunningTask.State -ne "Running") {
-        throw "History task was created but is not running."
-    }
-
-}
-catch {
-    throw "History monitor could not be started: $($_.Exception.Message)"
-}
+Write-Host "      Chrome Upload Detector: Running"
 
 # =========================================================
 # [9] FINAL VERIFICATION
@@ -529,12 +616,12 @@ catch {
 
 Write-Host "[9/9] Verifying installation..."
 
-$service = Get-Service `
-    -Name $ServiceName `
+$HistoryService = Get-Service `
+    -Name $HistoryServiceName `
     -ErrorAction SilentlyContinue
 
-$task = Get-ScheduledTask `
-    -TaskName $HistoryTaskName `
+$UploadService = Get-Service `
+    -Name $UploadServiceName `
     -ErrorAction SilentlyContinue
 
 $listener = Get-NetTCPConnection `
@@ -547,45 +634,53 @@ Write-Host " Installation complete"
 Write-Host "========================================="
 Write-Host ""
 
-if ($service -and $service.Status -eq "Running") {
-    Write-Host "  [OK] Upload detector service : Running"
+if ($HistoryService -and $HistoryService.Status -eq "Running") {
+    Write-Host "  [OK] Chrome history service   : Running"
 }
 else {
-    Write-Warning "Upload detector service is not running."
+    throw "Chrome History Monitor service verification failed."
 }
 
-if ($task) {
-
-    $PrincipalInfo = $task.Principal
-
-    Write-Host "  [OK] Chrome history task     : Installed"
-    Write-Host "  [OK] History task account    : $($PrincipalInfo.UserId)"
-    Write-Host "  [OK] History polling         : 10 seconds"
-
+if ($UploadService -and $UploadService.Status -eq "Running") {
+    Write-Host "  [OK] Upload detector service  : Running"
 }
 else {
-    throw "Chrome history task verification failed. The task does not exist."
+    throw "Chrome Upload Detector service verification failed."
 }
 
 if ($listener) {
-    Write-Host "  [OK] Upload listener         : Port 8765"
+    Write-Host "  [OK] Upload listener          : Port 8765"
 }
 else {
     Write-Warning "Upload listener is not currently detected."
 }
 
-if (Test-Path $InstalledSqlite) {
-    Write-Host "  [OK] SQLite                  : Installed"
+if (Test-Path $InstalledHistoryServiceExe) {
+    Write-Host "  [OK] History service EXE      : Installed"
 }
 else {
-    Write-Warning "SQLite executable is missing."
+    throw "ChromeHistoryService.exe is missing."
+}
+
+if (Test-Path $InstalledUploadExe) {
+    Write-Host "  [OK] Upload service EXE       : Installed"
+}
+else {
+    throw "ChromeUploadDetectorService.exe is missing."
+}
+
+if (Test-Path $InstalledSqlite) {
+    Write-Host "  [OK] SQLite                   : Installed"
+}
+else {
+    throw "SQLite executable is missing."
 }
 
 if (Test-Path $InstalledCollector) {
-    Write-Host "  [OK] Collector               : Installed"
+    Write-Host "  [OK] Collector                : Installed"
 }
 else {
-    Write-Warning "Collector is missing."
+    throw "Collector is missing."
 }
 
 if ((Test-Path $InstalledMvp -PathType Container) -and
@@ -597,10 +692,40 @@ else {
     throw "ChromeUploadDetector-MVP folder verification failed."
 }
 
+# ---------------------------------------------------------
+# Verify collector process
+# ---------------------------------------------------------
+
+Start-Sleep -Seconds 2
+
+$CollectorProcesses = @(
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.CommandLine -like "*collector.ps1*"
+    }
+)
+
+if ($CollectorProcesses.Count -eq 1) {
+    Write-Host "  [OK] Collector process        : 1 running instance"
+}
+elseif ($CollectorProcesses.Count -eq 0) {
+    Write-Warning "No collector.ps1 process detected yet. Check service.log and collector.log."
+}
+else {
+    Write-Warning "Multiple collector.ps1 processes detected: $($CollectorProcesses.Count)"
+    $CollectorProcesses |
+        Select-Object ProcessId,ParentProcessId,CommandLine |
+        Format-Table -AutoSize
+}
+
 Write-Host ""
 Write-Host "PC identity is provided by the Wazuh agent."
 Write-Host "History monitoring covers Windows user Chrome profiles."
+Write-Host "History collector polling is controlled by collector.ps1."
 Write-Host "Upload monitoring runs as a Windows service."
+Write-Host ""
+Write-Host "Installed directory:"
+Write-Host "  $BaseDir"
 Write-Host ""
 Write-Host "========================================="
 Write-Host ""

@@ -94,7 +94,25 @@ try {
 
                 $json = $obj | ConvertTo-Json -Compress
 
-                $line = "CHROME_UPLOAD $json"
+                # -------------------------------------------------
+                # Distinguish upload events from clipboard pastes
+                # -------------------------------------------------
+
+                if ($obj.type -eq "chrome_paste") {
+
+                    $line = "CHROME_PASTE $json"
+
+                    Write-ReceiverLog `
+                        "Clipboard paste event received."
+
+                }
+                else {
+
+                    $line = "UPLOAD_ACTIVITY $json"
+
+                    Write-ReceiverLog `
+                        "Upload event received: type=$($obj.type)"
+                }
 
                 Write-UploadLog -Line $line
 
@@ -104,7 +122,8 @@ try {
             }
             catch {
 
-                Write-ReceiverLog "Invalid JSON received: $($_.Exception.Message)"
+                Write-ReceiverLog `
+                    "Invalid JSON received: $($_.Exception.Message)"
 
                 $response = '{"ok":false}'
                 $ctx.Response.StatusCode = 400
@@ -126,13 +145,16 @@ try {
         }
         catch {
 
-            Write-ReceiverLog "Receiver loop error: $($_.Exception.Message)"
+            Write-ReceiverLog `
+                "Receiver loop error: $($_.Exception.Message)"
         }
     }
 }
 catch {
 
-    Write-ReceiverLog "Receiver failed to start: $($_.Exception.Message)"
+    Write-ReceiverLog `
+        "Receiver failed to start: $($_.Exception.Message)"
+
     exit 1
 }
 finally {

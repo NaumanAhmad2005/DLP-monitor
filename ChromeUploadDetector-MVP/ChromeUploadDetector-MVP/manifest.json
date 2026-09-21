@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Chrome Upload Detector (Local)",
-  "version": "0.1.0",
-  "description": "Detects files selected for upload in Chrome and sends local events to the collector.",
+  "name": "Chrome Upload & Paste Detector (Local)",
+  "version": "0.2.0",
+  "description": "Detects browser file selection, drag/drop, upload submission, and clipboard paste metadata in Chrome and sends local events to the collector.",
   "permissions": [],
   "host_permissions": [
     "<all_urls>",
