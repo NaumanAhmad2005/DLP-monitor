@@ -1,117 +1,139 @@
-# DLP Based Web Activity Monitor and Upload Detector 
+# DLP-Based Web Activity Monitor and Upload Detector
 
 ## Overview
 
-It is a Windows-based DLP monitoring solution designed to monitor **multiple Windows users and Chrome profiles** on an endpoint. It collects Chrome browsing history and detects file upload activity through a Chrome Extension, processes the telemetry locally, and forwards structured events to **Wazuh** for centralized monitoring, custom rule-based detection, and security alerting through the Wazuh Dashboard.
+This Windows-based DLP monitoring solution collects Chrome browsing history and detects Chrome file-upload and clipboard-paste activity. It processes telemetry locally and forwards structured events to Wazuh for centralized monitoring, custom rule-based detection, and alerts in the Wazuh Dashboard.
 
-The system maintains **separate state for each Windows user and Chrome profile**, allowing browsing activity from multiple users on the same Windows machine to be collected without mixing their records.
+The project supports two deployment types:
+
+- Complete installation for critical systems
+- Upload-detection-only installation for normal systems
 
 ## Features
 
-* Multi-user Windows endpoint monitoring
-* Multi-profile Chrome monitoring
-* Chrome browsing history collection
-* Per-user and per-profile state tracking
-* SQLite-based local archival
-* Chrome upload activity detection
-* Windows background service for persistent upload monitoring
-* SYSTEM-based scheduled task for history collection
-* Wazuh Agent/Manager integration
-* Custom Wazuh detection and suppression rules
-* Centralized security alerts and visualization through Wazuh Dashboard
+- Multi-user Windows and multi-profile Chrome history monitoring
+- Per-user and per-profile state tracking
+- SQLite-based Chrome history archival
+- Chrome file-upload detection
+- Chrome clipboard-paste detection
+- Persistent Windows services
+- Wazuh Agent, Manager, and Dashboard integration
+- Custom Wazuh decoders and detection rules
+- Optional Sysmon-based supporting telemetry
 
 ## Technology Stack
 
-| Technology                    | Role                                                                 |
-| ----------------------------- | -------------------------------------------------------------------- |
-| PowerShell                    | History collector, upload receiver, installer and management scripts |
-| SQLite                        | Local history archive and state management                           |
-| C# / Windows Service          | Persistent upload detector host                                      |
-| JavaScript / Chrome Extension | Browser upload activity detection                                    |
-| Windows Task Scheduler        | Launches the history collector in SYSTEM context                     |
-| Windows Services              | Provides persistent upload monitoring                                |
-| Wazuh Agent                   | Endpoint telemetry transport and identity                            |
-| Wazuh Manager                 | Event processing, rules and alerts                                   |
-| Wazuh Dashboard               | SOC monitoring and visualization                                     |
-| Sysmon                        | Supporting endpoint telemetry                                        |
-| TCP 8765                      | Extension-to-receiver communication                                  |
+| Technology | Purpose |
+|---|---|
+| PowerShell | Collector, receiver, installers, and management scripts |
+| SQLite | Local Chrome history archive |
+| C# / Windows Services | Persistent monitoring service hosts |
+| JavaScript / Chrome Extension | Chrome upload and paste detection |
+| Wazuh Agent | Log collection and transport |
+| Wazuh Manager | Decoding, rule processing, and alert generation |
+| Wazuh Dashboard | Centralized monitoring and visualization |
+| Sysmon | Supporting endpoint telemetry |
+| TCP port 8765 | Extension-to-receiver communication |
 
 ## Architecture
 
-```text
-                         Windows Endpoint
-┌──────────────────────────────────────────────────────────────┐
-│                                                              │
-│   User 1 ──► Chrome Profile ──┐                              │
-│   User 2 ──► Chrome Profile ──┤                              │
-│   User 3 ──► Chrome Profile ──┤                              │
-│                               │                              │
-│                               ▼                              │
-│                        Chrome History DB                     │
-│                               │                              │
-│                               ▼                              │
-│                        collector.ps1                         │
-│                               │                              │
-│                               ▼                              │
-│                            SQLite                            │
-│                               │                              │
-│                               ▼                              │
-│                       chrome_history.log                     │
-│                                                              │
-│   Chrome Upload Extension                                    │
-│          │                                                   │
-│          ▼                                                   │
-│   Windows Service ──► receiver.ps1 ──► chrome_upload.log     │
-│                                                              │
-└──────────────────────────────┬───────────────────────────────┘
-                               │
-                               ▼
-                         Wazuh Agent
-                               │
-                               ▼
-                        Wazuh Manager
-                               │
-                               ▼
-                         Custom Rules
-                               │
-                               ▼
-                       Wazuh Dashboard
-```
-
-## Multi-User Monitoring
-
-The system is designed for Windows endpoints where **multiple users may have separate Chrome profiles**.
-
-The history collector identifies the Windows user and associated Chrome profile and maintains separate state files using the following concept:
+### Complete Installation – Critical Systems
 
 ```text
-state_<user>_<profile>.txt
+Chrome History Database
+        |
+        v
+collector.ps1
+        |
+        v
+SQLite Archive
+        |
+        v
+chrome_history.log
+        |
+        v
+Wazuh Agent
+        |
+        v
+Wazuh Manager
+        |
+        v
+Wazuh Dashboard
+
+
+Chrome Extension
+        |
+        v
+ChromeUploadDetectorService
+        |
+        v
+receiver.ps1
+        |
+        v
+chrome_upload.log
+        |
+        v
+Wazuh Agent
+        |
+        v
+Wazuh Manager
+        |
+        v
+Wazuh Dashboard
 ```
 
-This prevents events from different users or profiles from being treated as the same browsing session.
-
-For example:
+### Upload Detection Only – Normal Systems
 
 ```text
-User A
- ├── Chrome Profile: Default
- └── Chrome Profile: Profile 1
-
-User B
- ├── Chrome Profile: Default
- └── Chrome Profile: Profile 2
+Chrome Extension
+        |
+        v
+ChromeUploadDetectorService
+        |
+        v
+receiver.ps1
+        |
+        v
+chrome_upload.log
+        |
+        v
+Wazuh Agent
+        |
+        v
+Wazuh Manager
+        |
+        v
+Wazuh Dashboard
 ```
 
-Each user's Chrome activity is collected independently while the resulting telemetry is forwarded through the same Wazuh Agent installed on the endpoint.
+The complete installation uses the ChromeHistoryMonitor service to start and supervise the history collector. The upload-only installation does not install or modify the history-monitoring components.
 
-The history collector runs under **SYSTEM context**, allowing the scheduled task to provide coverage across Windows user profiles rather than depending on a single interactive PowerShell session.
+## Project Directory
 
-## Directory
+```text
+ChromeHistory&UploadMonitor│
+├── install.ps1
+├── install-upload-only.ps1
+├── uninstall.ps1
+├── collector.ps1
+├── receiver.ps1
+├── ChromeHistoryService.exe
+├── ChromeUploadDetectorService.exe
+├── sqlite3.exe
+│
+└── ChromeUploadDetector-MVP    ├── manifest.json
+    ├── background.js
+    └── content.js
+```
+
+## Runtime Directory
 
 ```text
 C:\ProgramData\ChromeHistoryMonitor\
+│
 ├── collector.ps1
 ├── receiver.ps1
+├── ChromeHistoryService.exe
 ├── ChromeUploadDetectorService.exe
 ├── sqlite3.exe
 ├── ChromeUploadDetector-MVP\
@@ -120,9 +142,22 @@ C:\ProgramData\ChromeHistoryMonitor\
 ├── chrome_upload.log
 ├── collector.log
 ├── receiver.log
+├── service.log
 ├── service-host.log
 └── state_<user>_<profile>.txt
 ```
+
+## Multi-User and Multi-Profile Monitoring
+
+The history collector discovers Windows user profiles and Chrome profiles independently. Each user/profile combination has its own state file:
+
+```text
+state_<user>_<profile>.txt
+```
+
+This prevents activity from different users or Chrome profiles from being processed as the same session.
+
+The collector runs through the ChromeHistoryMonitor Windows service under SYSTEM context and continuously checks for new Chrome history records.
 
 ## Event Formats
 
@@ -132,59 +167,111 @@ C:\ProgramData\ChromeHistoryMonitor\
 CHROME_HISTORY user=<WindowsUser> profile=<ChromeProfile> visit_id=<ID> time=<TIME> url=<URL> title=<TITLE>
 ```
 
-### Upload Activity
+### Chrome Upload Activity
 
 ```text
-UPLOAD_ACTIVITY ...
+UPLOAD_ACTIVITY {"type":"file_dropped", ...}
 ```
 
-Including the Windows user and Chrome profile in telemetry allows Wazuh events to be associated with the appropriate endpoint user/profile.
+Possible upload event types include:
+
+- file_selected
+- file_dropped
+- upload_submit
+
+### Chrome Paste Activity
+
+```text
+CHROME_PASTE {"type":"chrome_paste", ...}
+```
+
+Paste events may contain page information, input details, paste type, clipboard types, text size, timestamp, and tab information. The extension records metadata and does not transmit the actual clipboard text or image content.
 
 ## Wazuh Rules
 
 ```text
 100200  Chrome browsing history
-100201  Narrow collector PowerShell suppression
+100201  Collector PowerShell suppression
 100202  Chrome upload activity
+100210  Chrome clipboard paste activity
 ```
 
-## Installation
+Custom decoders identify the CHROME_PASTE and UPLOAD_ACTIVITY event prefixes before the corresponding rules process them.
 
-See the endpoint and SOC installation documents for complete deployment instructions.
+## Monitor Installation
 
-The Chrome MVP can currently be loaded unpacked from:
+### 1. Complete Installation – Critical Systems
 
-```text
-C:\ProgramData\ChromeHistoryMonitor\ChromeUploadDetector-MVP\ChromeUploadDetector-MVP
+Purpose: Installs Chrome history monitoring and Chrome upload/paste detection.
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process
+.\install.ps1
 ```
+
+### 2. Upload Detection Only – Normal Systems
+
+Purpose: Installs only Chrome upload and paste detection.
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process
+.\install-upload-only.ps1
+```
+
+Run both scripts from an elevated PowerShell window.
 
 ## Monitoring Model
 
-The history collector continuously polls Chrome history at a **10-second target interval**. A Windows Task Scheduler task launches the collector in **SYSTEM context**, providing multi-user coverage across the endpoint.
+The ChromeHistoryMonitor service starts and supervises collector.ps1. The collector archives new Chrome history records in SQLite and writes events to chrome_history.log.
 
-The collector maintains separate state for each Windows user and Chrome profile so that previously processed events are not repeatedly collected.
+The Chrome Upload Detector service runs receiver.ps1. The Chrome extension sends upload and paste metadata to the receiver through TCP port 8765. The receiver writes events to chrome_upload.log.
 
-Upload monitoring runs independently as an **Automatic LocalSystem Windows service**. The Chrome Extension communicates with the receiver through TCP port `8765`, allowing upload activity to be captured and written to the upload telemetry log.
+The Wazuh Agent monitors both logs and forwards them to the Wazuh Manager. Custom decoders and rules generate alerts that are displayed in the Wazuh Dashboard.
 
-Both telemetry streams are monitored by the Wazuh Agent and forwarded to the Wazuh Manager, where custom rules generate security alerts that can be viewed in the Wazuh Dashboard.
+The current architecture does not use Windows Task Scheduler for history monitoring.
 
-## Security & Privacy
+## Troubleshooting
 
-* Browsing history is sensitive telemetry; collect only with appropriate authorization.
-* Restrict access to ProgramData logs and databases.
-* URLs may contain sensitive query parameters.
-* Keep Wazuh suppressions narrow and specific.
-* Correlate upload telemetry with other endpoint evidence when needed.
-* Use approved enterprise Chrome management for production extension deployment.
-* Protect collected telemetry from unauthorized access or modification.
+Check the history service:
+
+```powershell
+Get-Service "ChromeHistoryMonitor"
+```
+
+Check the upload service:
+
+```powershell
+Get-Service "Chrome Upload Detector"
+```
+
+Check upload and paste logs:
+
+```powershell
+Get-Content "C:\ProgramData\ChromeHistoryMonitor\chrome_upload.log" -Tail 20
+```
+
+Check history logs:
+
+```powershell
+Get-Content "C:\ProgramData\ChromeHistoryMonitor\chrome_history.log" -Tail 20
+```
+
+## Security and Privacy
+
+- Collect telemetry only with proper authorization.
+- Restrict access to the monitoring directory and logs.
+- Treat URLs, page titles, and upload metadata as sensitive.
+- Keep Wazuh suppression rules narrow and specific.
+- Protect logs and databases from unauthorized modification.
+- Use approved enterprise Chrome management for extension deployment.
+- Avoid collecting actual clipboard contents unless explicitly required and authorized.
 
 ## Future Development
 
-* Structured upload decoding
-* File hashes and richer upload metadata
-* Centralized extension deployment
-* Improved multi-user/profile discovery
-* Sysmon correlation
-* Additional Wazuh detection rules
-* Additional Wazuh dashboards and visualizations
-* Enhanced event correlation between browsing and upload activity
+- Structured Wazuh JSON decoding
+- File hashes and richer upload metadata
+- Centralized extension deployment
+- Improved profile discovery
+- Sysmon correlation
+- Additional Wazuh rules and dashboard visualizations
+- Correlation between browsing and upload activity
